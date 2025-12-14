@@ -35,6 +35,7 @@ interface Token {
 interface TokenSearchProps {
   chainId: number;
   activeTab?: 'public' | 'private';
+  onDropdownToggle?: (isOpen: boolean) => void;
 }
 
 // Map wagmi chain IDs to CoW Swap supported chains
@@ -323,7 +324,7 @@ const getExplorerUrl = (chainId: number, address: string): string | null => {
   return `${config.explorer}/token/${address}`;
 };
 
-export default function TokenSearch({ chainId, activeTab = 'public' }: TokenSearchProps) {
+export default function TokenSearch({ chainId, activeTab = 'public', onDropdownToggle }: TokenSearchProps) {
   const [searchQuery, setSearchQuery] = useState('');
   const [tokens, setTokens] = useState<Token[]>([]);
   const [filteredTokens, setFilteredTokens] = useState<Token[]>([]);
@@ -1393,6 +1394,11 @@ export default function TokenSearch({ chainId, activeTab = 'public' }: TokenSear
       setIsOpen(true);
     }
   }, []);
+
+  // Notify parent when dropdown state changes
+  useEffect(() => {
+    onDropdownToggle?.(isOpen);
+  }, [isOpen, onDropdownToggle]);
 
   const showResults = isOpen;
 

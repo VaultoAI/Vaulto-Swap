@@ -215,6 +215,14 @@ body {
     min-height: auto;
   }
   
+  /* Mobile sticky gold banner - ensure it stays at top */
+  /* The banner uses Tailwind classes for sticky positioning */
+  /* Additional CSS ensures cross-browser compatibility */
+  [class*="sticky"][class*="md:hidden"] {
+    position: -webkit-sticky !important;
+    position: sticky !important;
+  }
+  
   /* Mobile search bar dropdown z-index - ensure it appears above header */
   .token-dropdown-scrollbar {
     z-index: 60 !important;
