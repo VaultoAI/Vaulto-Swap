@@ -310,7 +310,7 @@ export default function Home() {
       {/* Mobile Sticky Gold Banner - Join our Community */}
       <div className="block md:hidden sticky top-0 left-0 right-0 z-[60] w-full">
         <a
-          href="https://discord.gg/XZ8TARpG"
+          href="https://discord.gg/wxXsxm7GGb"
           target="_blank"
           rel="noopener noreferrer"
           className="w-full bg-gradient-to-r from-yellow-400 to-yellow-500 hover:from-yellow-300 hover:to-yellow-400 text-black text-sm font-semibold py-2.5 px-4 flex items-center justify-center gap-2 transition-all duration-200 shadow-lg shadow-yellow-500/25"
@@ -384,7 +384,7 @@ export default function Home() {
           <div className="hidden md:block absolute left-1/2 -translate-x-1/2 top-[calc(50%+1.25rem)] w-full max-w-md px-4 pointer-events-none">
             <div className="flex justify-center pointer-events-auto">
               <a
-                href="https://discord.gg/XZ8TARpG"
+                href="https://discord.gg/wxXsxm7GGb"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="px-4 py-1.5 bg-gradient-to-r from-yellow-400 to-yellow-500 hover:from-yellow-300 hover:to-yellow-400 text-black text-xs font-semibold rounded-lg transition-all duration-200 shadow-lg shadow-yellow-500/25 whitespace-nowrap flex items-center gap-1.5"
@@ -753,7 +753,7 @@ export default function Home() {
               
               {/* Discord */}
               <a 
-                href="https://discord.gg/XZ8TARpG" 
+                href="https://discord.gg/wxXsxm7GGb" 
                 target="_blank" 
                 rel="noopener noreferrer"
                 className="text-gray-400 hover:text-yellow-300 transition-colors duration-200"
