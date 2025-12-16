@@ -68,7 +68,8 @@ export function clearCached(key: string): void {
  */
 export function clearExpiredEntries(): void {
   const now = Date.now();
-  for (const [key, entry] of cacheStore.entries()) {
+  const entries = Array.from(cacheStore.entries());
+  for (const [key, entry] of entries) {
     if (isExpired(entry.timestamp)) {
       cacheStore.delete(key);
     }
