@@ -155,7 +155,7 @@ export async function validateTokenListUrl(
  * 
  * @param primaryUrl - Primary API URL to try first
  * @param fallbackUrl - Fallback URL (local static file) if primary fails
- * @returns Array of validated token list URLs
+ * @returns Array of validated token list URLs (always includes at least fallback if it exists)
  */
 export async function getValidatedTokenListUrls(
   primaryUrl: string,
@@ -189,8 +189,10 @@ export async function getValidatedTokenListUrls(
     `❌ Both primary and fallback token lists failed. Primary: ${primaryResult.error}, Fallback: ${fallbackResult.error}`
   );
   
-  // Return empty array if both fail (widget will handle gracefully)
-  return [];
+  // Always return fallback URL even if validation failed - widget can handle it gracefully
+  // This ensures the Vaulto list is always attempted to be loaded
+  console.warn(`⚠️ Using fallback URL despite validation failure: ${fallbackUrl}`);
+  return [fallbackUrl];
 }
 
 /**
@@ -226,24 +228,53 @@ export async function validateMultipleTokenLists(
 
 /**
  * Gets all validated token lists for CowSwap widget
- * Validates both Vaulto and Uniswap lists with fallback support
+ * Validates Vaulto list FIRST (using same validation logic as Uniswap), then Uniswap
+ * Guarantees Vaulto list (primary or fallback) is always included and placed first
  * 
- * @returns Array of validated token list URLs to pass to widget
+ * @returns Array of validated token list URLs to pass to widget (Vaulto list always first)
  */
 export async function getCowSwapTokenLists(): Promise<string[]> {
   const vaultoPrimary = 'https://vaulto.dev/api/token-list/';
   const vaultoFallback = '/token-list.json';
   const uniswapList = 'https://ipfs.io/ipns/tokens.uniswap.org';
 
-  // Validate Vaulto list (with fallback) and Uniswap list in parallel
-  const [vaultoUrls, uniswapResult] = await Promise.all([
-    getValidatedTokenListUrls(vaultoPrimary, vaultoFallback),
-    validateTokenListUrl(uniswapList),
-  ]);
+  const validatedUrls: string[] = [];
 
-  const validatedUrls: string[] = [...vaultoUrls];
+  // Validate Vaulto primary list FIRST using same validation logic as Uniswap
+  const vaultoPrimaryResult = await validateTokenListUrl(vaultoPrimary);
+  
+  if (vaultoPrimaryResult.isValid) {
+    console.log(`✅ Vaulto primary token list validated: ${vaultoPrimary} (${vaultoPrimaryResult.tokenCount} tokens)`);
+    validatedUrls.push(vaultoPrimary);
+  } else {
+    console.warn(
+      `⚠️ Vaulto primary token list failed: ${vaultoPrimary}`,
+      vaultoPrimaryResult.error
+    );
+    console.log(`🔄 Falling back to Vaulto fallback: ${vaultoFallback}`);
+    
+    // Try Vaulto fallback using same validation logic
+    const vaultoFallbackResult = await validateTokenListUrl(vaultoFallback);
+    
+    if (vaultoFallbackResult.isValid) {
+      console.log(`✅ Vaulto fallback token list validated: ${vaultoFallback} (${vaultoFallbackResult.tokenCount} tokens)`);
+      validatedUrls.push(vaultoFallback);
+    } else {
+      console.warn(
+        `⚠️ Vaulto fallback token list validation failed: ${vaultoFallback}`,
+        vaultoFallbackResult.error
+      );
+      // Still add fallback URL - widget can handle it gracefully
+      console.warn(`⚠️ Using Vaulto fallback URL despite validation failure: ${vaultoFallback}`);
+      validatedUrls.push(vaultoFallback);
+    }
+  }
 
+  // Validate Uniswap list AFTER Vaulto (using same validation logic)
+  const uniswapResult = await validateTokenListUrl(uniswapList);
+  
   if (uniswapResult.isValid) {
+    console.log(`✅ Uniswap token list validated: ${uniswapList} (${uniswapResult.tokenCount} tokens)`);
     validatedUrls.push(uniswapList);
   } else {
     console.warn(
@@ -252,10 +283,10 @@ export async function getCowSwapTokenLists(): Promise<string[]> {
     );
   }
 
-  if (validatedUrls.length === 0) {
-    console.error('❌ No token lists validated successfully. Widget may not have tokens available.');
-  } else {
-    console.log(`✅ Validated ${validatedUrls.length} token list(s) for CowSwap widget`);
+  // Vaulto list is always first (or at least attempted), so validatedUrls.length will be >= 1
+  console.log(`✅ Validated ${validatedUrls.length} token list(s) for CowSwap widget`);
+  if (validatedUrls.length > 0) {
+    console.log(`✅ Vaulto token list (first): ${validatedUrls[0]}`);
   }
 
   return validatedUrls;

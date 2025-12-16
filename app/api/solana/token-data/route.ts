@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { fetchTokenPriceByAddress } from '@/lib/api/coingecko';
+import { getTokenMetadata, getStockTicker, isTokenizedStock } from '@/lib/utils/token';
 import * as cheerio from 'cheerio';
 
 export interface SolanaTokenDataResponse {
@@ -278,8 +279,42 @@ export async function POST(request: NextRequest) {
           }
 
           // Add 24h price change from CoinGecko
-          if (coingeckoData?.price_change_percentage_24h !== undefined && coingeckoData.price_change_percentage_24h !== null) {
-            result.priceChange24h = coingeckoData.price_change_percentage_24h;
+          let priceChange24h = coingeckoData?.price_change_percentage_24h;
+          
+          // Fallback to yfinance for tokenized stocks if CoinGecko didn't return a valid percentage change
+          if ((priceChange24h === undefined || priceChange24h === null || isNaN(priceChange24h)) && address) {
+            try {
+              const tokenMetadata = getTokenMetadata(address);
+              if (tokenMetadata && isTokenizedStock(tokenMetadata.token)) {
+                const ticker = getStockTicker(tokenMetadata.token);
+                if (ticker) {
+                  // Fetch from yfinance using yahoo-finance2
+                  let yahooFinance: any;
+                  try {
+                    yahooFinance = await import('yahoo-finance2');
+                    const yf = yahooFinance.default || yahooFinance;
+                    const quote = await yf.quote(ticker);
+                    
+                    if (quote) {
+                      const yfinancePctChange = quote.regularMarketChangePercent || quote.changePercent;
+                      if (typeof yfinancePctChange === 'number' && !isNaN(yfinancePctChange)) {
+                        priceChange24h = yfinancePctChange;
+                      }
+                    }
+                  } catch (yfinanceError) {
+                    console.debug(`Failed to fetch yfinance price change for ${address} (${ticker}):`, yfinanceError);
+                    // Continue with undefined priceChange24h
+                  }
+                }
+              }
+            } catch (error) {
+              console.debug(`Failed to check token metadata for ${address}:`, error);
+              // Continue with undefined priceChange24h
+            }
+          }
+          
+          if (priceChange24h !== undefined && priceChange24h !== null && !isNaN(priceChange24h)) {
+            result.priceChange24h = priceChange24h;
           }
 
           return result;

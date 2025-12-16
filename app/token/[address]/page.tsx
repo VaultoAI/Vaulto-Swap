@@ -34,7 +34,7 @@ export default async function TokenPage({ params }: TokenPageProps) {
   const chainId = tokenInfo?.chainId || 1;
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-black via-gray-900 to-black relative w-full pb-8">
+    <div className="h-screen overflow-hidden bg-gradient-to-br from-black via-gray-900 to-black relative w-full">
       {/* Subtle Gold Gradient Overlays - matching main page */}
       <div className="fixed inset-0 pointer-events-none overflow-hidden z-0">
         {/* Top-left gold glow */}
@@ -58,8 +58,8 @@ export default async function TokenPage({ params }: TokenPageProps) {
         </div>
       </div>
       
-      <main className="relative z-10">
-        <div className="container mx-auto py-8">
+      <main className="relative z-10 h-full overflow-hidden">
+        <div className="container mx-auto py-8 h-full overflow-hidden">
           <TokenDetailsClient address={address} chainId={chainId} />
         </div>
       </main>

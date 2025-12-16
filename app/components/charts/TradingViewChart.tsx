@@ -43,8 +43,8 @@ export default function TradingViewChart({
         return symbol;
       }
       // Default to NASDAQ for common stocks
-      // Common stocks on NASDAQ: AAPL, GOOGL, MSFT, AMZN, TSLA
-      const nasdaqStocks = ['AAPL', 'GOOGL', 'MSFT', 'AMZN', 'TSLA', 'NVDA', 'META'];
+      // Common stocks on NASDAQ: AAPL, GOOGL, MSFT, AMZN, TSLA, PLTR
+      const nasdaqStocks = ['AAPL', 'GOOGL', 'MSFT', 'AMZN', 'TSLA', 'NVDA', 'META', 'PLTR'];
       if (nasdaqStocks.includes(symbol.toUpperCase())) {
         return `NASDAQ:${symbol}`;
       }

@@ -655,3 +655,37 @@ button[aria-label="Connect Wallet"] {
   z-index: 9999 !important;
 }
 
+/* CowSwap Widget Responsive Width - Ensure widget matches background shape */
+/* Mobile: widget should be calc(100vw - 2rem) to match background */
+/* Desktop: widget should be 392px to match background */
+@media (max-width: 767px) {
+  /* Ensure CowSwap widget container respects parent width */
+  [class*="cowswap"],
+  [id*="cowswap"],
+  iframe[src*="cowswap"],
+  iframe[src*="cow.fi"] {
+    width: 100% !important;
+    max-width: calc(100vw - 2rem) !important;
+    min-width: 0 !important;
+  }
+  
+  /* Ensure widget wrapper doesn't overflow */
+  div[class*="widget"] {
+    width: 100% !important;
+    max-width: calc(100vw - 2rem) !important;
+    overflow: hidden !important;
+  }
+}
+
+/* Desktop: ensure widget is exactly 392px */
+@media (min-width: 768px) {
+  [class*="cowswap"],
+  [id*="cowswap"],
+  iframe[src*="cowswap"],
+  iframe[src*="cow.fi"] {
+    width: 392px !important;
+    max-width: 392px !important;
+    min-width: 392px !important;
+  }
+}
+

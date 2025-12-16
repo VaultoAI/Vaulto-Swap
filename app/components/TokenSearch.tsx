@@ -10,13 +10,15 @@ import { isChainSupported } from '@/lib/uniswap/subgraphs';
 import { chainConfig } from '@/config/chains';
 import type { LiquidityApiResponse, LiquidityTokenResult } from '@/app/components/search/types';
 import { fetchTokenPriceByAddress, type CoinGeckoPriceData } from '@/lib/api/coingecko';
+import { getTokenMetadata, getStockTicker, isTokenizedStock } from '@/lib/utils/token';
 import toast from 'react-hot-toast';
 import { 
   getCached, 
   setCached, 
   getUniswapLiquidityCacheKey, 
   getSolanaTokenDataCacheKey, 
-  getTokenPriceCacheKey 
+  getTokenPriceCacheKey,
+  getStockPctChangeCacheKey 
 } from '@/lib/utils/cache';
 
 interface Token {
@@ -389,6 +391,17 @@ const getExplorerUrl = (chainId: number, address: string): string | null => {
   return `${config.explorer}/token/${address}`;
 };
 
+// Check if a token is verified (Ondo stock or private stock)
+const isVerifiedToken = (token: Token, privateTokenAddresses: Set<string>): boolean => {
+  // Check if it's an Ondo stock (symbol ends with "on" and length > 2)
+  const isOndoStock = token.symbol.toUpperCase().endsWith('ON') && token.symbol.length > 2;
+  
+  // Check if it's a private stock
+  const isPrivateStock = privateTokenAddresses.has(token.address);
+  
+  return isOndoStock || isPrivateStock;
+};
+
 export default function TokenSearch({ chainId, activeTab = 'public', onDropdownToggle }: TokenSearchProps) {
   const [searchQuery, setSearchQuery] = useState('');
   const [tokens, setTokens] = useState<Token[]>([]);
@@ -468,6 +481,11 @@ export default function TokenSearch({ chainId, activeTab = 'public', onDropdownT
       logoURI: "/Private Companies/xai.webp",
     },
   ], []);
+
+  // Set of private token addresses for verification check
+  const privateTokenAddresses = useMemo(() => {
+    return new Set(privateTokens.map(token => token.address));
+  }, [privateTokens]);
 
   // Vaulto tokens list
   const vaultoTokens: Token[] = useMemo(() => [
@@ -1093,6 +1111,46 @@ export default function TokenSearch({ chainId, activeTab = 'public', onDropdownT
             }
           }
           
+          let priceChange = priceData?.price_change_percentage_24h;
+          
+          // For tokenized stocks, always check yfinance if CoinGecko didn't return a valid percentage change
+          // Check if token is a tokenized stock first to optimize
+          if ((priceChange === undefined || priceChange === null || isNaN(priceChange)) && token.address) {
+            try {
+              const tokenMetadata = getTokenMetadata(token.address);
+              if (tokenMetadata && isTokenizedStock(tokenMetadata.token)) {
+                const ticker = getStockTicker(tokenMetadata.token);
+                if (ticker) {
+                  // Check cache first for yfinance data
+                  const stockPctCacheKey = getStockPctChangeCacheKey(token.address);
+                  let cachedStockPct = getCached<{ priceChangePercent: number }>(stockPctCacheKey);
+                  
+                  if (cachedStockPct && typeof cachedStockPct.priceChangePercent === 'number' && !isNaN(cachedStockPct.priceChangePercent)) {
+                    priceChange = cachedStockPct.priceChangePercent;
+                  } else {
+                    // Fetch from yfinance API - always attempt for tokenized stocks
+                    try {
+                      const stockPctResponse = await fetch(`/api/token/${token.address}/stock-pct-change`);
+                      if (stockPctResponse.ok) {
+                        const stockData = await stockPctResponse.json();
+                        if (typeof stockData.priceChangePercent === 'number' && !isNaN(stockData.priceChangePercent)) {
+                          priceChange = stockData.priceChangePercent;
+                          // Cache the result for future use
+                          setCached(stockPctCacheKey, { priceChangePercent: stockData.priceChangePercent });
+                        }
+                      }
+                    } catch (fetchError) {
+                      console.debug(`Failed to fetch yfinance price change for ${token.symbol} (${ticker}):`, fetchError);
+                    }
+                  }
+                }
+              }
+            } catch (yfinanceError) {
+              console.debug(`Failed to check/fetch yfinance price change for ${token.symbol}:`, yfinanceError);
+              // Continue with undefined priceChange
+            }
+          }
+          
           const [liquidityData] = await Promise.all([
             fetchUniswapLiquidity(chainId, token.symbol),
           ]);
@@ -1116,17 +1174,17 @@ export default function TokenSearch({ chainId, activeTab = 'public', onDropdownT
                 tvlUSD: uniswapToken.tvlUSD,
                 volumeUSD: uniswapToken.volumeUSD,
                 pools: uniswapToken.pools,
-                priceChange24h: (priceData && typeof priceData.price_change_percentage_24h === 'number') ? priceData.price_change_percentage_24h : undefined,
+                priceChange24h: (typeof priceChange === 'number' && !isNaN(priceChange)) ? priceChange : undefined,
               });
               return; // Already updated with price change
             }
           }
           
           // If we have price data but no Uniswap match (or no Uniswap data), just add price change
-          if (priceData && typeof priceData.price_change_percentage_24h === 'number') {
+          if (typeof priceChange === 'number' && !isNaN(priceChange)) {
             tokenMap.set(key, {
               ...existing,
-              priceChange24h: priceData.price_change_percentage_24h,
+              priceChange24h: priceChange,
             });
           }
         } catch (error) {
@@ -1343,14 +1401,49 @@ export default function TokenSearch({ chainId, activeTab = 'public', onDropdownT
               }
             } catch (error) {
               console.debug(`Failed to fetch price for ${token.address}:`, error);
-              return { 
-                key: `${token.chainId}-${token.address.toLowerCase()}`, 
-                priceChange: undefined 
-              };
             }
           }
           
-          const priceChange = priceData?.price_change_percentage_24h;
+          let priceChange = priceData?.price_change_percentage_24h;
+          
+          // For tokenized stocks, always check yfinance if CoinGecko didn't return a valid percentage change
+          // Check if token is a tokenized stock first to optimize
+          if ((priceChange === undefined || priceChange === null || isNaN(priceChange)) && token.address) {
+            try {
+              const tokenMetadata = getTokenMetadata(token.address);
+              if (tokenMetadata && isTokenizedStock(tokenMetadata.token)) {
+                const ticker = getStockTicker(tokenMetadata.token);
+                if (ticker) {
+                  // Check cache first for yfinance data
+                  const stockPctCacheKey = getStockPctChangeCacheKey(token.address);
+                  let cachedStockPct = getCached<{ priceChangePercent: number }>(stockPctCacheKey);
+                  
+                  if (cachedStockPct && typeof cachedStockPct.priceChangePercent === 'number' && !isNaN(cachedStockPct.priceChangePercent)) {
+                    priceChange = cachedStockPct.priceChangePercent;
+                  } else {
+                    // Fetch from yfinance API - always attempt for tokenized stocks
+                    try {
+                      const stockPctResponse = await fetch(`/api/token/${token.address}/stock-pct-change`);
+                      if (stockPctResponse.ok) {
+                        const stockData = await stockPctResponse.json();
+                        if (typeof stockData.priceChangePercent === 'number' && !isNaN(stockData.priceChangePercent)) {
+                          priceChange = stockData.priceChangePercent;
+                          // Cache the result for future use
+                          setCached(stockPctCacheKey, { priceChangePercent: stockData.priceChangePercent });
+                        }
+                      }
+                    } catch (fetchError) {
+                      console.debug(`Failed to fetch yfinance price change for ${token.address} (${ticker}):`, fetchError);
+                    }
+                  }
+                }
+              }
+            } catch (yfinanceError) {
+              console.debug(`Failed to check/fetch yfinance price change for ${token.address}:`, yfinanceError);
+              // Continue with undefined priceChange
+            }
+          }
+          
           // Ensure we return a number or undefined (not null)
           // Only return if it's a valid number (not null, not undefined)
           return { 
@@ -1703,8 +1796,24 @@ export default function TokenSearch({ chainId, activeTab = 'public', onDropdownT
                           // Display for private tokens - matches public token styling
                           <>
                             <div className="flex items-center justify-between gap-1 md:gap-1.5 mb-1 md:mb-1">
-                              <div className="text-white text-sm md:text-xs font-medium">
+                              <div className="text-white text-sm md:text-xs font-medium flex items-center gap-1.5">
                                 {token.symbol}
+                                {isVerifiedToken(token, privateTokenAddresses) && (
+                                  <span className="inline-flex items-center justify-center w-4 h-4 md:w-4 md:h-4 rounded-full bg-green-500/20 border border-green-500/30 flex-shrink-0" title="Verified">
+                                    <svg
+                                      xmlns="http://www.w3.org/2000/svg"
+                                      viewBox="0 0 20 20"
+                                      fill="currentColor"
+                                      className="w-2.5 h-2.5 md:w-2.5 md:h-2.5 text-green-400"
+                                    >
+                                      <path
+                                        fillRule="evenodd"
+                                        d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"
+                                        clipRule="evenodd"
+                                      />
+                                    </svg>
+                                  </span>
+                                )}
                               </div>
                               <div className="flex items-center gap-1">
                                 {(() => {
@@ -1783,7 +1892,7 @@ export default function TokenSearch({ chainId, activeTab = 'public', onDropdownT
                                 if (hasVolume) {
                                   return (
                                     <span className="px-1.5 py-0.5 md:px-1 md:py-0.25 text-[9px] md:text-[10px] font-medium bg-yellow-400/20 text-yellow-400 rounded flex-shrink-0">
-                                      {formatTVL(displayVolume)} <span className="text-[8px] md:text-[8px] text-white">24hr Volume</span>
+                                      {formatTVL(displayVolume)} <span className="text-[8px] md:text-[8px] text-white">24h Vol</span>
                                     </span>
                                   );
                                 }
@@ -1879,7 +1988,7 @@ export default function TokenSearch({ chainId, activeTab = 'public', onDropdownT
                           // Full display for public tokens
                           <>
                             <div className="flex items-center justify-between gap-1 md:gap-2 mb-1 md:mb-1">
-                              <div className="text-white text-sm md:text-sm font-medium">
+                              <div className="text-white text-sm md:text-sm font-medium flex items-center gap-1.5">
                                 {token.symbol}
                                 {(() => {
                                   const poolPair = getTopPoolPair(token);
@@ -1888,6 +1997,22 @@ export default function TokenSearch({ chainId, activeTab = 'public', onDropdownT
                                   }
                                   return null;
                                 })()}
+                                {isVerifiedToken(token, privateTokenAddresses) && (
+                                  <span className="inline-flex items-center justify-center w-4 h-4 md:w-4 md:h-4 rounded-full bg-green-500/20 border border-green-500/30" title="Verified">
+                                    <svg
+                                      xmlns="http://www.w3.org/2000/svg"
+                                      viewBox="0 0 20 20"
+                                      fill="currentColor"
+                                      className="w-2.5 h-2.5 md:w-2.5 md:h-2.5 text-green-400"
+                                    >
+                                      <path
+                                        fillRule="evenodd"
+                                        d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"
+                                        clipRule="evenodd"
+                                      />
+                                    </svg>
+                                  </span>
+                                )}
                               </div>
                               <div className="flex items-center gap-1">
                                 {(() => {
@@ -1932,7 +2057,7 @@ export default function TokenSearch({ chainId, activeTab = 'public', onDropdownT
                                 if (hasVolume) {
                                   return (
                                     <span className="px-1.5 py-0.5 md:px-1 md:py-0.25 text-[9px] md:text-[10px] font-medium bg-yellow-400/20 text-yellow-400 rounded flex-shrink-0">
-                                      {formatTVL(displayVolume)} <span className="text-[8px] md:text-[8px] text-white">24hr Volume</span>
+                                      {formatTVL(displayVolume)} <span className="text-[8px] md:text-[8px] text-white">24h Vol</span>
                                     </span>
                                   );
                                 }
@@ -2008,24 +2133,52 @@ export default function TokenSearch({ chainId, activeTab = 'public', onDropdownT
                               </div>
                               {(() => {
                                 const displayVolume = getDisplayVolume(token);
-                                const hasVolume = displayVolume !== null && displayVolume > 0;
+                                const displayTVL = getDisplayTVL(token);
                                 
-                                if (hasVolume) {
-                                  return (
-                                    <Link
-                                      href={`/token/${token.address}`}
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                      }}
-                                      prefetch={true}
-                                      className="hidden md:inline-flex items-center justify-center min-h-[32px] md:min-h-[20px] px-1.5 md:px-1.5 text-[10px] md:text-[9px] font-semibold bg-gradient-to-r from-yellow-400 to-yellow-500 hover:from-yellow-300 hover:to-yellow-400 text-gray-800 rounded transition-all duration-200 shadow-sm shadow-yellow-500/25"
-                                      title="View token details"
-                                    >
-                                      <span>More Info</span>
-                                    </Link>
-                                  );
-                                }
-                                return null;
+                                // Build URL with all token information query parameters if available
+                                // Always show the link, passing available data via query params
+                                const buildTokenUrl = () => {
+                                  const baseUrl = `/token/${token.address}`;
+                                  const params = new URLSearchParams();
+                                  if (displayTVL !== null && displayTVL > 0) {
+                                    params.set('tvl', displayTVL.toString());
+                                  }
+                                  if (displayVolume !== null && displayVolume > 0) {
+                                    params.set('volume', displayVolume.toString());
+                                  }
+                                  // Pass symbol so we can detect tokenized stocks (e.g., Ondo tokens ending in "on")
+                                  if (token.symbol) {
+                                    params.set('symbol', token.symbol);
+                                  }
+                                  // Pass name so detail page shows correct token name
+                                  if (token.name) {
+                                    params.set('name', token.name);
+                                  }
+                                  // Pass chainId to ensure correct chain context
+                                  if (token.chainId) {
+                                    params.set('chainId', token.chainId.toString());
+                                  }
+                                  // Pass 24h price change if available
+                                  if (token.priceChange24h !== undefined && token.priceChange24h !== null) {
+                                    params.set('priceChange24h', token.priceChange24h.toString());
+                                  }
+                                  const queryString = params.toString();
+                                  return queryString ? `${baseUrl}?${queryString}` : baseUrl;
+                                };
+                                
+                                return (
+                                  <Link
+                                    href={buildTokenUrl()}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                    }}
+                                    prefetch={true}
+                                    className="hidden md:inline-flex items-center justify-center min-h-[32px] md:min-h-[20px] px-1.5 md:px-1.5 text-[10px] md:text-[9px] font-semibold bg-gradient-to-r from-yellow-400 to-yellow-500 hover:from-yellow-300 hover:to-yellow-400 text-gray-800 rounded transition-all duration-200 shadow-sm shadow-yellow-500/25"
+                                    title="View token details"
+                                  >
+                                    <span>More Info</span>
+                                  </Link>
+                                );
                               })()}
                             </div>
                           </>

@@ -2,12 +2,13 @@
 
 import { useEffect, useState } from 'react';
 import Image from 'next/image';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import TradingViewChart from '@/app/components/charts/TradingViewChart';
 import { fetchTokenPriceBySymbol, fetchTokenPriceByAddress, type CoinGeckoPriceData } from '@/lib/api/coingecko';
 import { getTokenMetadata, isTokenizedStock, getStockTicker } from '@/lib/utils/token';
 import { formatTVL } from '@/lib/utils/formatters';
 import { chainConfig } from '@/config/chains';
+import { getPoolsForToken } from '@/lib/uniswap/pools';
 import toast from 'react-hot-toast';
 
 interface TokenDetailsClientProps {
@@ -30,22 +31,83 @@ interface StockData {
 
 export default function TokenDetailsClient({ address, chainId }: TokenDetailsClientProps) {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [coingeckoData, setCoingeckoData] = useState<CoinGeckoPriceData | null>(null);
   const [stockData, setStockData] = useState<StockData | null>(null);
+  const [tvlUSD, setTvlUSD] = useState<number | null>(null);
+  const [volumeUSD, setVolumeUSD] = useState<number | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // Get all token information from URL query parameters if available (from search results)
+  // Read synchronously to use in fetch logic - must be before tokenChainId usage
+  const tvlParam = searchParams?.get('tvl');
+  const volumeParam = searchParams?.get('volume');
+  const symbolParam = searchParams?.get('symbol');
+  const nameParam = searchParams?.get('name');
+  const chainIdParam = searchParams?.get('chainId');
+  const priceChange24hParam = searchParams?.get('priceChange24h');
+  
+  // Use data from URL params if available (from search results), otherwise use token config or placeholder
+  const searchResultSymbol = symbolParam || null;
+  const searchResultName = nameParam || null;
+  const searchResultChainId = chainIdParam ? parseInt(chainIdParam, 10) : null;
+  const searchResultPriceChange24h = priceChange24hParam ? parseFloat(priceChange24hParam) : null;
 
   // Get token metadata - may be null if token not in config
   const tokenInfo = getTokenMetadata(address);
   const token = tokenInfo?.token;
-  const tokenChainId = chainId || tokenInfo?.chainId || 1;
+  // Use chainId from URL params (search results) if available, then prop, then config, then default to 1
+  const tokenChainId = searchResultChainId || chainId || tokenInfo?.chainId || 1;
   const isStock = token ? isTokenizedStock(token) : false;
   const ticker = token ? getStockTicker(token) : null;
   
-  // Use token symbol/name from metadata, or placeholder values
-  const tokenSymbol = token?.symbol || 'TOKEN';
-  const tokenName = token?.name || 'Token';
+  const initialTvl = tvlParam ? (() => {
+    const val = parseFloat(tvlParam);
+    return !isNaN(val) && val > 0 ? val : null;
+  })() : null;
+  const initialVolume = volumeParam ? (() => {
+    const val = parseFloat(volumeParam);
+    return !isNaN(val) && val > 0 ? val : null;
+  })() : null;
+
+  // Use token symbol/name from search results (most accurate), then metadata, then placeholder values
+  const tokenSymbol = searchResultSymbol || token?.symbol || 'TOKEN';
+  const tokenName = searchResultName || token?.name || 'Token';
   const tokenDecimals = token?.decimals || 18;
+
+  // Disable all scrolling when component mounts
+  useEffect(() => {
+    const html = document.documentElement;
+    const body = document.body;
+    
+    // Store original values
+    const originalHtmlOverflow = html.style.overflow;
+    const originalBodyOverflow = body.style.overflow;
+    const originalBodyHeight = body.style.height;
+    
+    // Disable scrolling
+    html.style.overflow = 'hidden';
+    body.style.overflow = 'hidden';
+    body.style.height = '100vh';
+    
+    return () => {
+      // Restore original values
+      html.style.overflow = originalHtmlOverflow;
+      body.style.overflow = originalBodyOverflow;
+      body.style.height = originalBodyHeight;
+    };
+  }, []);
+
+  // Set initial values from URL params
+  useEffect(() => {
+    if (initialTvl !== null) {
+      setTvlUSD(initialTvl);
+    }
+    if (initialVolume !== null) {
+      setVolumeUSD(initialVolume);
+    }
+  }, [initialTvl, initialVolume]);
 
   useEffect(() => {
     const fetchData = async () => {
@@ -79,8 +141,14 @@ export default function TokenDetailsClient({ address, chainId }: TokenDetailsCli
 
         setCoingeckoData(priceData);
 
-        // Fetch stock data for tokenized stocks
-        if (isStock && ticker) {
+        // Determine if this is a tokenized stock (from config or Ondo token from search)
+        const effectiveSymbol = searchResultSymbol || coingeckoData?.symbol || tokenSymbol;
+        const isOndoToken = effectiveSymbol.toUpperCase().endsWith('ON') && effectiveSymbol.length > 2;
+        const ondoTicker = isOndoToken ? effectiveSymbol.slice(0, -2).toUpperCase() : null;
+        const stockTicker = ticker || ondoTicker;
+
+        // Fetch stock data for tokenized stocks (from config or Ondo tokens)
+        if ((isStock && ticker) || (isOndoToken && ondoTicker)) {
           try {
             const stockResponse = await fetch(`/api/token/${address}/stock-data`);
             if (stockResponse.ok) {
@@ -92,6 +160,58 @@ export default function TokenDetailsClient({ address, chainId }: TokenDetailsCli
           } catch (stockError) {
             console.error('Error fetching stock data:', stockError);
             // Don't set error state, just log - stock data is optional
+          }
+        }
+
+        // Fetch TVL and volume data only if not already set from URL params
+        const needsTvl = initialTvl === null;
+        const needsVolume = initialVolume === null;
+        
+        if (needsTvl || needsVolume) {
+          try {
+            if (tokenChainId === 101) {
+              // Solana token - use Solana token data API
+              const solanaResponse = await fetch(`/api/solana/token-data?t=${Date.now()}`, {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ addresses: [address] }),
+                cache: 'no-store',
+              });
+
+              if (solanaResponse.ok) {
+                const solanaData = await solanaResponse.json();
+                const tokenData = solanaData.tokens?.[0];
+                if (tokenData) {
+                  if (needsTvl && tokenData.tvlUSD !== undefined && tokenData.tvlUSD > 0) {
+                    setTvlUSD(tokenData.tvlUSD);
+                  }
+                  if (needsVolume && tokenData.volumeUSD !== undefined && tokenData.volumeUSD > 0) {
+                    setVolumeUSD(tokenData.volumeUSD);
+                  }
+                }
+              }
+            } else {
+              // Uniswap/EVM chains - fetch pools and calculate TVL/volume
+              const poolsResult = await getPoolsForToken(tokenChainId, address, 100);
+              if (poolsResult.pools && poolsResult.pools.length > 0) {
+                // Calculate total TVL from all pools
+                const totalTVL = poolsResult.pools.reduce((sum, pool) => sum + (pool.tvlUSD || 0), 0);
+                // Calculate total 24hr volume from all pools
+                const totalVolume = poolsResult.pools.reduce((sum, pool) => sum + (pool.volumeUSD || 0), 0);
+                
+                if (needsTvl && totalTVL > 0) {
+                  setTvlUSD(totalTVL);
+                }
+                if (needsVolume && totalVolume > 0) {
+                  setVolumeUSD(totalVolume);
+                }
+              }
+            }
+          } catch (tvlVolumeError) {
+            console.error('Error fetching TVL/volume data:', tvlVolumeError);
+            // Don't set error state, just log - TVL/volume data is optional
           }
         }
       } catch (err: any) {
@@ -144,16 +264,21 @@ export default function TokenDetailsClient({ address, chainId }: TokenDetailsCli
   }
 
   // Determine which price data to display
+  // Prioritize search result data, then stock data, then CoinGecko data
   const displayPrice = stockData?.currentPrice || coingeckoData?.current_price || 0;
-  const priceChange = stockData?.priceChangePercent || coingeckoData?.price_change_percentage_24h || 0;
+  const priceChange = searchResultPriceChange24h !== null 
+    ? searchResultPriceChange24h 
+    : (stockData?.priceChangePercent || coingeckoData?.price_change_percentage_24h || 0);
   const volume = stockData?.volume || coingeckoData?.total_volume || 0;
   const marketCap = stockData?.marketCap || coingeckoData?.market_cap || 0;
 
   // Determine chart symbol
-  // Use CoinGecko symbol if available, otherwise use token symbol
-  const effectiveSymbol = coingeckoData?.symbol || tokenSymbol;
+  // Prioritize symbol from search results (more accurate for tokenized stocks), then CoinGecko, then token config
+  // This ensures we can detect tokenized stocks from public search even if not in config
+  const effectiveSymbol = searchResultSymbol || coingeckoData?.symbol || tokenSymbol;
   
   // Check if this is an Ondo tokenized stock (symbol ends with "on")
+  // This works for tokens from public search that aren't in config
   const isOndoToken = effectiveSymbol.toUpperCase().endsWith('ON') && effectiveSymbol.length > 2;
   const ondoTicker = isOndoToken ? effectiveSymbol.slice(0, -2).toUpperCase() : null;
   
@@ -176,8 +301,8 @@ export default function TokenDetailsClient({ address, chainId }: TokenDetailsCli
     chartSymbol = ondoTickerMappings[upperSymbol] || ondoTicker;
     chartType = 'stock';
   } else if (isStock && ticker) {
-    // Regular tokenized stock from config
-    chartSymbol = ticker;
+    // Regular tokenized stock from config - format as NASDAQ:<ticker>
+    chartSymbol = `NASDAQ:${ticker}`;
     chartType = 'stock';
   } else {
     // Regular crypto token
@@ -197,32 +322,31 @@ export default function TokenDetailsClient({ address, chainId }: TokenDetailsCli
   const explorerUrl = getExplorerUrl(tokenChainId, address);
 
   return (
-    <div className="w-full max-w-7xl mx-auto px-4 py-6 space-y-6 animate-fade-in">
-      {/* Back Button */}
-      <button
-        onClick={() => router.push('/')}
-        className="flex items-center gap-2 text-yellow-400 hover:text-yellow-300 transition-colors mb-4"
-      >
-        <svg
-          xmlns="http://www.w3.org/2000/svg"
-          fill="none"
-          viewBox="0 0 24 24"
-          strokeWidth={2}
-          stroke="currentColor"
-          className="w-5 h-5"
-        >
-          <path
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            d="M15 19l-7-7 7-7"
-          />
-        </svg>
-        <span>Back to Home</span>
-      </button>
-
+    <div className="w-full max-w-7xl mx-auto px-4 py-6 space-y-6 animate-fade-in overflow-hidden h-full">
       {/* Token Header */}
       <div className="flex flex-col md:flex-row items-start md:items-center gap-4 pb-6">
         <div className="flex items-center gap-4">
+          {/* Back Button - Yellow element with white arrow */}
+          <button
+            onClick={() => router.push('/')}
+            className="flex items-center justify-center w-10 h-10 rounded-full bg-yellow-400 hover:bg-yellow-500 transition-colors"
+            aria-label="Back to home"
+          >
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              fill="none"
+              viewBox="0 0 24 24"
+              strokeWidth={2.5}
+              stroke="white"
+              className="w-6 h-6"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="M15 19l-7-7 7-7"
+              />
+            </svg>
+          </button>
           {(token?.logoURI || coingeckoData?.image) && (
             <div className="relative w-16 h-16 rounded-full overflow-hidden bg-gray-800">
               <Image
@@ -256,12 +380,30 @@ export default function TokenDetailsClient({ address, chainId }: TokenDetailsCli
                   {priceChange >= 0 ? '+' : ''}{priceChange.toFixed(2)}%
                 </span>
               </div>
-              <div>
-                <span className="text-gray-400 text-xs mr-2">Market Cap:</span>
-                <span className="text-sm font-semibold text-white">
-                  {marketCap > 0 ? formatTVL(marketCap) : 'N/A'}
-                </span>
-              </div>
+              {marketCap > 0 && (
+                <div>
+                  <span className="text-gray-400 text-xs mr-2">Market Cap:</span>
+                  <span className="text-sm font-semibold text-white">
+                    {formatTVL(marketCap)}
+                  </span>
+                </div>
+              )}
+              {volumeUSD !== null && volumeUSD > 0 && (
+                <div>
+                  <span className="text-gray-400 text-xs mr-2">24h Vol:</span>
+                  <span className="text-sm font-semibold text-white">
+                    {formatTVL(volumeUSD)}
+                  </span>
+                </div>
+              )}
+              {tvlUSD !== null && tvlUSD > 0 && (
+                <div>
+                  <span className="text-gray-400 text-xs mr-2">TVL:</span>
+                  <span className="text-sm font-semibold text-white">
+                    {formatTVL(tvlUSD)}
+                  </span>
+                </div>
+              )}
             </div>
           </div>
         </div>

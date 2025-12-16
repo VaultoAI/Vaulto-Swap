@@ -108,6 +108,14 @@ export function getTokenPriceCacheKey(chainId: number, address: string): string 
   return `token-price-${chainId}-${normalizedAddress}`;
 }
 
+/**
+ * Generate cache key for stock percentage change data
+ */
+export function getStockPctChangeCacheKey(address: string): string {
+  const normalizedAddress = address.toLowerCase();
+  return `stock-pct-change-${normalizedAddress}`;
+}
+
 // Periodically clean up expired entries (every 5 minutes)
 if (typeof window !== 'undefined') {
   setInterval(clearExpiredEntries, 5 * 60 * 1000);
