@@ -475,12 +475,13 @@ export default function CowSwapWidgetWrapper({ onTokenSelect }: CowSwapWidgetWra
     const baseUrl = typeof window !== 'undefined' ? window.location.origin : '';
     const mobileLogoUrl = `${baseUrl}/mobilelogo.png`;
     
-    // Calculate responsive width - match background shape width exactly
-    // Mobile: calc(100vw - 2rem) = viewport width minus 2rem (32px) padding
-    // Desktop: 392px
+    // Calculate responsive width - match container width exactly
+    // Mobile: container uses 100% width, which equals viewport width minus 32px (2rem from px-4 padding)
+    // Desktop: 392px (fixed width)
     let widgetWidth = '392px'; // Default desktop width
     if (typeof window !== 'undefined' && windowWidth !== null && windowWidth < 768) {
-      // Calculate exact pixel width for mobile: viewport width - 32px (2rem)
+      // Calculate exact pixel width for mobile: viewport width - 32px (accounts for parent px-4 padding)
+      // This matches the actual container width when using width: 100%
       const mobileWidth = windowWidth - 32;
       widgetWidth = `${mobileWidth}px`;
     }
@@ -1601,12 +1602,11 @@ export default function CowSwapWidgetWrapper({ onTokenSelect }: CowSwapWidgetWra
         {/* Container for both background shape and widget - ensures they're perfectly aligned */}
         {/* Mobile: full width with padding, Desktop: fixed 392px width */}
         <div className="relative w-full md:w-[392px] min-h-[500px]">
-          {/* Background element behind widget with rounded corners - matches widget width exactly */}
+          {/* Background element behind widget with rounded corners - spans edge-to-edge */}
           <div 
-            className="absolute rounded-2xl left-1/2 -translate-x-1/2 md:left-0 md:translate-x-0"
+            className="absolute rounded-2xl left-0 right-0"
             style={{
-              width: 'calc(100vw - 2rem)', // Mobile: full viewport minus padding (matches widget container)
-              maxWidth: '392px', // Desktop: fixed 392px width
+              width: '100%', // Use 100% to fill parent container edge-to-edge
               height: '500px',
               top: '0',
               backgroundColor: 'rgb(31, 41, 55)', // Dark theme background color (matches Jupiter)
@@ -1614,13 +1614,11 @@ export default function CowSwapWidgetWrapper({ onTokenSelect }: CowSwapWidgetWra
             }}
           />
           
-          {/* Widget container - matches background shape width exactly */}
+          {/* Widget container - matches background shape width exactly, centered */}
           <div 
-            className="relative z-10 flex justify-center overflow-hidden"
+            className="relative z-10 w-full overflow-hidden"
             style={{
-              width: 'calc(100vw - 2rem)', // Mobile: same as background
-              maxWidth: '392px', // Desktop: same as background
-              margin: '0 auto', // Center the container
+              width: '100%', // Use 100% to fill background element edge-to-edge
             }}
           >
             <div 
