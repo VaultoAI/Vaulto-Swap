@@ -588,7 +588,7 @@ export default function CowSwapWidgetWrapper({ onTokenSelect }: CowSwapWidgetWra
             className="absolute rounded-2xl left-1/2 -translate-x-1/2 md:left-0 md:translate-x-0"
             style={{
               width: 'calc(100vw - 2rem)', // Fixed width on mobile (full viewport minus padding)
-              maxWidth: '392px', // Fixed max width on desktop
+              maxWidth: '392px', // Increased width on desktop to fully cover widget
               height: '500px', // Reduced height on mobile
               top: '0',
               backgroundColor: 'rgb(31, 41, 55)', // Dark theme background color (matches Jupiter)

@@ -46,6 +46,7 @@ export interface SolanaTokenData {
   volumeUSD: number; // 24h volume
   marketCap?: number;
   marketCapFormatted?: string; // Formatted market cap from Jupiter (e.g., "$472B")
+  priceChange24h?: number; // 24h price change percentage
 }
 
 /**

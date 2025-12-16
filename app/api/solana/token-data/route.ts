@@ -10,6 +10,7 @@ export interface SolanaTokenDataResponse {
     volumeUSD: number; // 24h volume
     marketCap?: number;
     marketCapFormatted?: string; // Formatted market cap from Jupiter (e.g., "$472B")
+    priceChange24h?: number; // 24h price change percentage
   }>;
   error?: string;
 }
@@ -259,7 +260,7 @@ export async function POST(request: NextRequest) {
           const coingeckoData = await fetchTokenPriceByAddress(101, address);
 
           // Build response with liquidity from Jupiter and volume from CoinGecko
-          const result: { address: string; tvlUSD?: number; volumeUSD: number; marketCap?: number; marketCapFormatted?: string } = {
+          const result: { address: string; tvlUSD?: number; volumeUSD: number; marketCap?: number; marketCapFormatted?: string; priceChange24h?: number } = {
             address,
             volumeUSD: coingeckoData?.total_volume || 0,
           };
@@ -274,6 +275,11 @@ export async function POST(request: NextRequest) {
             result.marketCapFormatted = jupiterMarketCapFormatted;
           } else if (coingeckoData?.market_cap) {
             result.marketCap = coingeckoData.market_cap;
+          }
+
+          // Add 24h price change from CoinGecko
+          if (coingeckoData?.price_change_percentage_24h !== undefined && coingeckoData.price_change_percentage_24h !== null) {
+            result.priceChange24h = coingeckoData.price_change_percentage_24h;
           }
 
           return result;

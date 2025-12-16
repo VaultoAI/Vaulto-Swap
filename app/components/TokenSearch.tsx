@@ -9,7 +9,15 @@ import { formatTVL, formatFeeTier, truncateAddress } from '@/lib/utils/formatter
 import { isChainSupported } from '@/lib/uniswap/subgraphs';
 import { chainConfig } from '@/config/chains';
 import type { LiquidityApiResponse, LiquidityTokenResult } from '@/app/components/search/types';
+import { fetchTokenPriceByAddress, type CoinGeckoPriceData } from '@/lib/api/coingecko';
 import toast from 'react-hot-toast';
+import { 
+  getCached, 
+  setCached, 
+  getUniswapLiquidityCacheKey, 
+  getSolanaTokenDataCacheKey, 
+  getTokenPriceCacheKey 
+} from '@/lib/utils/cache';
 
 interface Token {
   address: string;
@@ -22,6 +30,7 @@ interface Token {
   volumeUSD?: number; // Optional 24hr volume from Uniswap or trading data
   marketCap?: number; // Optional market capitalization
   marketCapFormatted?: string; // Formatted market cap from Jupiter (e.g., "$472B")
+  priceChange24h?: number; // Optional 24h price change percentage
   pools?: Array<{
     poolAddress: string;
     feeTierBps: number;
@@ -123,15 +132,40 @@ const getUniswapAssetsUrl = (chainId: number, address: string): string => {
 // LocalStorage key for logo cache
 const LOGO_CACHE_KEY = 'vaulto_token_logo_cache';
 
-// Helper functions for localStorage caching
+// Cache TTL: 1 minute (60,000 milliseconds)
+const LOGO_CACHE_TTL_MS = 60 * 1000;
+
+interface LogoCacheEntry {
+  url: string | null;
+  timestamp: number;
+}
+
+// Helper functions for localStorage caching with TTL
 const loadLogoCache = (): Map<string, string | null> => {
   if (typeof window === 'undefined') return new Map();
   
   try {
     const cached = localStorage.getItem(LOGO_CACHE_KEY);
     if (cached) {
-      const parsed = JSON.parse(cached);
-      return new Map(Object.entries(parsed));
+      const parsed: Record<string, LogoCacheEntry | string | null> = JSON.parse(cached);
+      const result = new Map<string, string | null>();
+      const now = Date.now();
+      
+      // Handle both old format (string | null) and new format (LogoCacheEntry)
+      for (const [key, value] of Object.entries(parsed)) {
+        if (typeof value === 'object' && value !== null && 'timestamp' in value) {
+          // New format with timestamp
+          const entry = value as LogoCacheEntry;
+          if (now - entry.timestamp < LOGO_CACHE_TTL_MS) {
+            result.set(key, entry.url);
+          }
+        } else {
+          // Old format (backward compatibility) - treat as expired to force refresh
+          // Don't add to result, will be refreshed
+        }
+      }
+      
+      return result;
     }
   } catch (error) {
     console.debug('Failed to load logo cache from localStorage:', error);
@@ -143,10 +177,16 @@ const saveLogoToCache = (key: string, logoUrl: string | null): void => {
   if (typeof window === 'undefined') return;
   
   try {
-    const cached = loadLogoCache();
-    cached.set(key, logoUrl);
-    const serialized = Object.fromEntries(cached);
-    localStorage.setItem(LOGO_CACHE_KEY, JSON.stringify(serialized));
+    const cached = localStorage.getItem(LOGO_CACHE_KEY);
+    const parsed: Record<string, LogoCacheEntry | string | null> = cached ? JSON.parse(cached) : {};
+    
+    // Save with timestamp
+    parsed[key] = {
+      url: logoUrl,
+      timestamp: Date.now(),
+    };
+    
+    localStorage.setItem(LOGO_CACHE_KEY, JSON.stringify(parsed));
   } catch (error) {
     console.debug('Failed to save logo to localStorage cache:', error);
   }
@@ -162,6 +202,13 @@ const fetchUniswapLiquidity = async (
   chainId: number,
   query: string
 ): Promise<LiquidityApiResponse> => {
+  // Check cache first
+  const cacheKey = getUniswapLiquidityCacheKey(chainId, query);
+  const cached = getCached<LiquidityApiResponse>(cacheKey);
+  if (cached) {
+    return cached;
+  }
+
   try {
     const response = await fetch('/api/uniswap/liquidity', {
       method: 'POST',
@@ -177,9 +224,14 @@ const fetchUniswapLiquidity = async (
     }
 
     const data: LiquidityApiResponse = await response.json();
+    
+    // Cache successful response
+    setCached(cacheKey, data);
+    
     return data;
   } catch (error) {
     console.error('Error fetching Uniswap liquidity:', error);
+    // Don't cache errors
     return {
       chainId,
       tokens: [],
@@ -191,9 +243,16 @@ const fetchUniswapLiquidity = async (
 // Fetch Solana token data (liquidity, marketcap, volume) for token addresses
 const fetchSolanaTokenData = async (
   addresses: string[]
-): Promise<Array<{ address: string; tvlUSD?: number; volumeUSD: number; marketCap?: number; marketCapFormatted?: string }>> => {
+): Promise<Array<{ address: string; tvlUSD?: number; volumeUSD: number; marketCap?: number; marketCapFormatted?: string; priceChange24h?: number }>> => {
   if (addresses.length === 0) {
     return [];
+  }
+
+  // Check cache first
+  const cacheKey = getSolanaTokenDataCacheKey(addresses);
+  const cached = getCached<Array<{ address: string; tvlUSD?: number; volumeUSD: number; marketCap?: number; marketCapFormatted?: string; priceChange24h?: number }>>(cacheKey);
+  if (cached) {
+    return cached;
   }
 
   try {
@@ -212,9 +271,15 @@ const fetchSolanaTokenData = async (
     }
 
     const data = await response.json();
-    return data.tokens || [];
+    const tokens = data.tokens || [];
+    
+    // Cache successful response
+    setCached(cacheKey, tokens);
+    
+    return tokens;
   } catch (error) {
     console.error('Error fetching Solana token data:', error);
+    // Don't cache errors
     return addresses.map((address) => ({
       address,
       volumeUSD: 0,
@@ -788,6 +853,7 @@ export default function TokenSearch({ chainId, activeTab = 'public', onDropdownT
                 volumeUSD: data.volumeUSD,
                 marketCap: data.marketCap,
                 marketCapFormatted: data.marketCapFormatted,
+                priceChange24h: data.priceChange24h,
               };
             }
             return token;
@@ -951,6 +1017,7 @@ export default function TokenSearch({ chainId, activeTab = 'public', onDropdownT
                 volumeUSD: data.volumeUSD,
                 marketCap: data.marketCap,
                 marketCapFormatted: data.marketCapFormatted,
+                priceChange24h: data.priceChange24h,
               };
             }
             return token;
@@ -962,9 +1029,9 @@ export default function TokenSearch({ chainId, activeTab = 'public', onDropdownT
       }
     };
 
-    // Refresh immediately on mount, then every 30 seconds
+    // Refresh immediately on mount, then every 60 seconds (1 minute)
     refreshPrivateTokensData();
-    const intervalId = setInterval(refreshPrivateTokensData, 30000);
+    const intervalId = setInterval(refreshPrivateTokensData, 60000);
 
     // Cleanup interval on unmount or tab switch
     return () => {
@@ -1006,33 +1073,61 @@ export default function TokenSearch({ chainId, activeTab = 'public', onDropdownT
         tokenMap.set(key, token);
       });
 
-      // Fetch Uniswap liquidity data for each default token
+      // Fetch Uniswap liquidity data and price change for each default token
       // We'll search by each token's symbol
       const enrichmentPromises = defaultTokens.map(async (token) => {
         try {
-          const liquidityData = await fetchUniswapLiquidity(chainId, token.symbol);
+          // Check cache for price data first
+          const priceCacheKey = getTokenPriceCacheKey(chainId, token.address);
+          let priceData = getCached<CoinGeckoPriceData | null>(priceCacheKey);
           
+          // Fetch price if not cached
+          if (!priceData) {
+            try {
+              priceData = await fetchTokenPriceByAddress(chainId, token.address);
+              if (priceData) {
+                setCached(priceCacheKey, priceData);
+              }
+            } catch {
+              priceData = null; // Silently fail if price fetch fails
+            }
+          }
+          
+          const [liquidityData] = await Promise.all([
+            fetchUniswapLiquidity(chainId, token.symbol),
+          ]);
+          
+          const key = `${token.chainId}-${token.address.toLowerCase()}`;
+          const existing = tokenMap.get(key);
+          if (!existing) return; // Skip if token not in map
+          
+          // Process Uniswap data if available
           if (liquidityData.tokens && liquidityData.tokens.length > 0) {
-            // Find the matching token in the Uniswap results by address
             const matchingLiquidityToken = liquidityData.tokens.find(
               (lt) => lt.address.toLowerCase() === token.address.toLowerCase()
             );
             
             if (matchingLiquidityToken) {
               const uniswapToken = liquidityTokenToSearchResult(matchingLiquidityToken, chainId);
-              const key = `${uniswapToken.chainId}-${uniswapToken.address.toLowerCase()}`;
-              const existing = tokenMap.get(key);
               
-              if (existing) {
-                // Merge: keep local token data but add Uniswap TVL/volume/pools
-                tokenMap.set(key, {
-                  ...existing,
-                  tvlUSD: uniswapToken.tvlUSD,
-                  volumeUSD: uniswapToken.volumeUSD,
-                  pools: uniswapToken.pools,
-                });
-              }
+              // Merge: keep local token data but add Uniswap TVL/volume/pools
+              tokenMap.set(key, {
+                ...existing,
+                tvlUSD: uniswapToken.tvlUSD,
+                volumeUSD: uniswapToken.volumeUSD,
+                pools: uniswapToken.pools,
+                priceChange24h: (priceData && typeof priceData.price_change_percentage_24h === 'number') ? priceData.price_change_percentage_24h : undefined,
+              });
+              return; // Already updated with price change
             }
+          }
+          
+          // If we have price data but no Uniswap match (or no Uniswap data), just add price change
+          if (priceData && typeof priceData.price_change_percentage_24h === 'number') {
+            tokenMap.set(key, {
+              ...existing,
+              priceChange24h: priceData.price_change_percentage_24h,
+            });
           }
         } catch (error) {
           // Silently fail for individual tokens, continue with others
@@ -1229,6 +1324,62 @@ export default function TokenSearch({ chainId, activeTab = 'public', onDropdownT
         }
       }
 
+      // Fetch price change data for all tokens in the map (both local and Uniswap) in parallel
+      // This runs regardless of chain support since CoinGecko supports multiple chains
+      try {
+        const allTokensForPriceFetch = Array.from(tokenMap.values());
+        const priceDataPromises = allTokensForPriceFetch.map(async (token) => {
+          const priceCacheKey = getTokenPriceCacheKey(chainId, token.address);
+          
+          // Check cache first
+          let priceData = getCached<CoinGeckoPriceData | null>(priceCacheKey);
+          
+          // Fetch if not cached
+          if (!priceData) {
+            try {
+              priceData = await fetchTokenPriceByAddress(chainId, token.address);
+              if (priceData) {
+                setCached(priceCacheKey, priceData);
+              }
+            } catch (error) {
+              console.debug(`Failed to fetch price for ${token.address}:`, error);
+              return { 
+                key: `${token.chainId}-${token.address.toLowerCase()}`, 
+                priceChange: undefined 
+              };
+            }
+          }
+          
+          const priceChange = priceData?.price_change_percentage_24h;
+          // Ensure we return a number or undefined (not null)
+          // Only return if it's a valid number (not null, not undefined)
+          return { 
+            key: `${token.chainId}-${token.address.toLowerCase()}`, 
+            priceChange: (typeof priceChange === 'number' && !isNaN(priceChange) ? priceChange : undefined)
+          };
+        });
+        const priceDataResults = await Promise.all(priceDataPromises);
+        const priceDataMap = new Map(
+          priceDataResults.map(result => [result.key, result.priceChange])
+        );
+        
+        // Update all tokens with price change data (including 0 as valid value)
+        priceDataMap.forEach((priceChange, key) => {
+          const token = tokenMap.get(key);
+          // Set priceChange24h if we have a valid number (including 0)
+          // Only skip if undefined (fetch failed or no data)
+          if (token && typeof priceChange === 'number') {
+            tokenMap.set(key, {
+              ...token,
+              priceChange24h: priceChange,
+            });
+          }
+        });
+      } catch (error) {
+        // Silently fail price fetching - tokens will just not have price change data
+        console.debug('Error fetching price change data:', error);
+      }
+
       // Check if request was aborted before updating state
       if (currentAbortController.signal.aborted) {
         return;
@@ -1419,10 +1570,10 @@ export default function TokenSearch({ chainId, activeTab = 'public', onDropdownT
             onBlur={() => {
               setIsFocused(false);
             }}
-            className="w-full px-3 py-2.5 md:px-4 md:py-3 pl-10 md:pl-10 pr-10 md:pr-10 bg-gray-800/50 border border-gray-600/50 md:border-gray-600/50 rounded-xl text-white placeholder-gray-400 focus:outline-none focus:border-yellow-400/50 md:focus:border-gray-500 focus:ring-1 focus:ring-yellow-400/30 md:focus:ring-gray-500 text-sm md:text-base transition-all duration-200 min-h-[44px]"
+            className="w-full px-3 py-2.5 md:px-3 md:py-2 pl-10 md:pl-9 pr-10 md:pr-9 bg-gray-800/50 border border-gray-600/50 md:border-gray-600/50 rounded-xl text-white placeholder-gray-400 focus:outline-none focus:border-yellow-400/50 md:focus:border-gray-500 focus:ring-1 focus:ring-yellow-400/30 md:focus:ring-gray-500 text-sm md:text-sm transition-all duration-200 min-h-[44px]"
           />
           <svg
-            className="absolute left-3 md:left-3 top-1/2 -translate-y-1/2 w-4 h-4 md:w-4 md:h-4 text-gray-400"
+            className="absolute left-3 md:left-3 top-1/2 -translate-y-1/2 w-4 h-4 md:w-3.5 md:h-3.5 text-gray-400"
             fill="none"
             stroke="currentColor"
             viewBox="0 0 24 24"
@@ -1437,7 +1588,7 @@ export default function TokenSearch({ chainId, activeTab = 'public', onDropdownT
           {/* Keyboard shortcut hint - hidden on mobile */}
           {!isFocused && !searchQuery && (
             <div className="absolute right-3 md:right-3 top-1/2 -translate-y-1/2 pointer-events-none hidden md:block">
-              <kbd className="px-1.5 py-0.5 text-xs font-medium text-gray-400 bg-gray-700/50 border border-gray-600/50 rounded shadow-sm">
+              <kbd className="px-1.5 py-0.5 text-xs md:text-[10px] font-medium text-gray-400 bg-gray-700/50 border border-gray-600/50 rounded shadow-sm">
                 /
               </kbd>
             </div>
@@ -1510,7 +1661,7 @@ export default function TokenSearch({ chainId, activeTab = 'public', onDropdownT
                             alt={token.symbol}
                             width={24}
                             height={24}
-                            className="w-6 h-6 md:w-8 md:h-8 rounded-full"
+                            className="w-6 h-6 md:w-6 md:h-6 rounded-full"
                             onError={(e: React.SyntheticEvent<HTMLImageElement, Event>) => {
                               console.warn('TokenSearch: Failed to load logo', {
                                 symbol: token.symbol,
@@ -1537,7 +1688,7 @@ export default function TokenSearch({ chainId, activeTab = 'public', onDropdownT
                         {/* Fallback circle - shown when no logo or all image sources fail */}
                         {showFallback && (
                           <div
-                            className="w-6 h-6 md:w-8 md:h-8 rounded-full flex items-center justify-center text-[10px] md:text-xs font-semibold"
+                            className="w-6 h-6 md:w-6 md:h-6 rounded-full flex items-center justify-center text-[10px] md:text-[10px] font-semibold"
                             style={{
                               backgroundColor: fallbackColor,
                               color: fallbackTextColor,
@@ -1551,11 +1702,29 @@ export default function TokenSearch({ chainId, activeTab = 'public', onDropdownT
                         {activeTab === 'private' ? (
                           // Display for private tokens - matches public token styling
                           <>
-                            <div className="flex items-center justify-between gap-1 md:gap-2 mb-1 md:mb-1">
-                              <div className="text-white text-sm md:text-sm font-medium">
+                            <div className="flex items-center justify-between gap-1 md:gap-1.5 mb-1 md:mb-1">
+                              <div className="text-white text-sm md:text-xs font-medium">
                                 {token.symbol}
                               </div>
                               <div className="flex items-center gap-1">
+                                {(() => {
+                                  // Show 24hr price change - green for positive, red for negative
+                                  const priceChange = token.priceChange24h;
+                                  if (priceChange !== undefined && priceChange !== null) {
+                                    const isPositive = priceChange >= 0;
+                                    const formattedChange = `${isPositive ? '+' : ''}${priceChange.toFixed(2)}%`;
+                                    return (
+                                      <span className={`px-3 py-0.5 md:px-2 md:py-0.25 text-[9px] md:text-[9px] font-medium rounded flex-shrink-0 ${
+                                        isPositive 
+                                          ? 'bg-green-400/20 text-green-400' 
+                                          : 'bg-red-400/20 text-red-400'
+                                      }`}>
+                                        {formattedChange}
+                                      </span>
+                                    );
+                                  }
+                                  return null;
+                                })()}
                                 {(() => {
                                   // Show TVL from Jupiter if available
                                   const tvlValue = token.tvlUSD;
@@ -1563,8 +1732,8 @@ export default function TokenSearch({ chainId, activeTab = 'public', onDropdownT
                                   
                                   if (hasTVL) {
                                     return (
-                                      <span className="px-1.5 py-0.5 md:px-1 md:py-0.25 text-[9px] md:text-[10px] font-medium bg-yellow-400/20 text-yellow-400 rounded flex-shrink-0">
-                                        {formatTVL(tvlValue)} <span className="text-[8px] md:text-[9px] text-white">TVL</span>
+                                      <span className="px-1.5 py-0.5 md:px-1 md:py-0.25 text-[9px] md:text-[9px] font-medium bg-yellow-400/20 text-yellow-400 rounded flex-shrink-0">
+                                        {formatTVL(tvlValue)} <span className="text-[8px] md:text-[8px] text-white">TVL</span>
                                       </span>
                                     );
                                   }
@@ -1579,14 +1748,14 @@ export default function TokenSearch({ chainId, activeTab = 'public', onDropdownT
                                     // Display Jupiter's formatted value with MCap label (e.g., "$472B MCap")
                                     return (
                                       <span className="px-1.5 py-0.5 md:px-1 md:py-0.25 text-[9px] md:text-[10px] font-medium bg-yellow-400/20 text-yellow-400 rounded flex-shrink-0">
-                                        {marketCapFormatted} <span className="text-[8px] md:text-[9px] text-white">MCap</span>
+                                        {marketCapFormatted} <span className="text-[8px] md:text-[8px] text-white">MCap</span>
                                       </span>
                                     );
                                   } else if (marketCapValue !== undefined && marketCapValue > 0) {
                                     // Fall back to formatted CoinGecko value with MCap label
                                     return (
                                       <span className="px-1.5 py-0.5 md:px-1 md:py-0.25 text-[9px] md:text-[10px] font-medium bg-yellow-400/20 text-yellow-400 rounded flex-shrink-0">
-                                        {formatTVL(marketCapValue)} <span className="text-[8px] md:text-[9px] text-white">MCap</span>
+                                        {formatTVL(marketCapValue)} <span className="text-[8px] md:text-[8px] text-white">MCap</span>
                                       </span>
                                     );
                                   }
@@ -1594,8 +1763,8 @@ export default function TokenSearch({ chainId, activeTab = 'public', onDropdownT
                                 })()}
                               </div>
                             </div>
-                            <div className="flex items-center justify-between gap-1 md:gap-2 mb-1 md:mb-1">
-                              <div className="text-gray-400 text-xs md:text-sm truncate">
+                            <div className="flex items-center justify-between gap-1 md:gap-1.5 mb-1 md:mb-1">
+                              <div className="text-gray-400 text-xs md:text-xs truncate">
                                 <span className="block md:hidden">Prestock {token.name}</span>
                                 <a
                                   href={`https://prestocks.com/${token.name.toLowerCase()}`}
@@ -1614,17 +1783,17 @@ export default function TokenSearch({ chainId, activeTab = 'public', onDropdownT
                                 if (hasVolume) {
                                   return (
                                     <span className="px-1.5 py-0.5 md:px-1 md:py-0.25 text-[9px] md:text-[10px] font-medium bg-yellow-400/20 text-yellow-400 rounded flex-shrink-0">
-                                      {formatTVL(displayVolume)} <span className="text-[8px] md:text-[9px] text-white">24h</span>
+                                      {formatTVL(displayVolume)} <span className="text-[8px] md:text-[8px] text-white">24hr Volume</span>
                                     </span>
                                   );
                                 }
                                 return null;
                               })()}
                             </div>
-                            <div className="flex items-center justify-between gap-1 md:gap-2">
-                              <div className="flex items-center gap-1 md:gap-2">
-                                <span className="text-gray-600 text-[10px] md:text-xs font-mono">{truncateAddress(token.address, 6, 4)}</span>
-                                <div className="hidden md:flex items-center gap-0.5 md:gap-1">
+                            <div className="flex items-center justify-between gap-1 md:gap-1.5">
+                              <div className="flex items-center gap-1 md:gap-1.5">
+                                <span className="text-gray-600 text-[10px] md:text-[10px] font-mono">{truncateAddress(token.address, 6, 4)}</span>
+                                <div className="hidden md:flex items-center gap-0.5 md:gap-0.5">
                                   <button
                                     onClick={(e) => {
                                       e.stopPropagation();
@@ -1638,7 +1807,7 @@ export default function TokenSearch({ chainId, activeTab = 'public', onDropdownT
                                         },
                                       });
                                     }}
-                                    className="inline-flex items-center justify-center w-5 h-5 md:w-4 md:h-4 text-yellow-400 hover:text-yellow-300 hover:bg-yellow-400/10 rounded transition-colors"
+                                    className="inline-flex items-center justify-center w-5 h-5 md:w-3.5 md:h-3.5 text-yellow-400 hover:text-yellow-300 hover:bg-yellow-400/10 rounded transition-colors"
                                     title="Copy address"
                                     aria-label="Copy address"
                                   >
@@ -1648,7 +1817,7 @@ export default function TokenSearch({ chainId, activeTab = 'public', onDropdownT
                                       viewBox="0 0 24 24"
                                       strokeWidth={2}
                                       stroke="currentColor"
-                                      className="w-4 h-4 md:w-3 md:h-3"
+                                      className="w-4 h-4 md:w-2.5 md:h-2.5"
                                     >
                                       <path
                                         strokeLinecap="round"
@@ -1662,7 +1831,7 @@ export default function TokenSearch({ chainId, activeTab = 'public', onDropdownT
                                     target="_blank"
                                     rel="noopener noreferrer"
                                     onClick={(e) => e.stopPropagation()}
-                                    className="inline-flex items-center justify-center w-5 h-5 md:w-4 md:h-4 text-yellow-400 hover:text-yellow-300 hover:bg-yellow-400/10 rounded transition-colors"
+                                    className="inline-flex items-center justify-center w-5 h-5 md:w-3.5 md:h-3.5 text-yellow-400 hover:text-yellow-300 hover:bg-yellow-400/10 rounded transition-colors"
                                     title="View on Solscan"
                                   >
                                     <svg
@@ -1671,7 +1840,7 @@ export default function TokenSearch({ chainId, activeTab = 'public', onDropdownT
                                       viewBox="0 0 24 24"
                                       strokeWidth={2}
                                       stroke="currentColor"
-                                      className="w-4 h-4 md:w-3 md:h-3"
+                                      className="w-4 h-4 md:w-2.5 md:h-2.5"
                                     >
                                       <path
                                         strokeLinecap="round"
@@ -1695,7 +1864,7 @@ export default function TokenSearch({ chainId, activeTab = 'public', onDropdownT
                                       onClick={(e) => {
                                         e.stopPropagation();
                                       }}
-                                      className="hidden md:inline-flex items-center justify-center min-h-[32px] md:min-h-[24px] px-2 text-[10px] font-semibold bg-gradient-to-r from-yellow-400 to-yellow-500 hover:from-yellow-300 hover:to-yellow-400 text-gray-800 rounded transition-all duration-200 shadow-sm shadow-yellow-500/25"
+                                      className="hidden md:inline-flex items-center justify-center min-h-[32px] md:min-h-[20px] px-1.5 md:px-1.5 text-[10px] md:text-[9px] font-semibold bg-gradient-to-r from-yellow-400 to-yellow-500 hover:from-yellow-300 hover:to-yellow-400 text-gray-800 rounded transition-all duration-200 shadow-sm shadow-yellow-500/25"
                                       title="View Jupiter price chart"
                                     >
                                       <span>More Info</span>
@@ -1715,27 +1884,47 @@ export default function TokenSearch({ chainId, activeTab = 'public', onDropdownT
                                 {(() => {
                                   const poolPair = getTopPoolPair(token);
                                   if (poolPair) {
-                                    return <span className="text-gray-400 font-normal text-[10px] md:text-xs"> ({poolPair})</span>;
+                                    return <span className="text-gray-400 font-normal text-[10px] md:text-[10px]"> ({poolPair})</span>;
                                   }
                                   return null;
                                 })()}
                               </div>
-                              {(() => {
-                                const displayTVL = getDisplayTVL(token);
-                                const hasTVL = displayTVL !== null && displayTVL > 0;
-                                
-                                if (hasTVL) {
-                                  return (
-                                    <span className="px-1.5 py-0.5 md:px-1 md:py-0.25 text-[9px] md:text-[10px] font-medium bg-yellow-400/20 text-yellow-400 rounded flex-shrink-0">
-                                      {formatTVL(displayTVL)} <span className="text-[8px] md:text-[9px] text-white">TVL</span>
-                                    </span>
-                                  );
-                                }
-                                return null;
-                              })()}
+                              <div className="flex items-center gap-1">
+                                {(() => {
+                                  // Show 24hr price change - green for positive, red for negative
+                                  const priceChange = token.priceChange24h;
+                                  if (priceChange !== undefined && priceChange !== null) {
+                                    const isPositive = priceChange >= 0;
+                                    const formattedChange = `${isPositive ? '+' : ''}${priceChange.toFixed(2)}%`;
+                                    return (
+                                      <span className={`px-3 py-0.5 md:px-2 md:py-0.25 text-[9px] md:text-[9px] font-medium rounded flex-shrink-0 ${
+                                        isPositive 
+                                          ? 'bg-green-400/20 text-green-400' 
+                                          : 'bg-red-400/20 text-red-400'
+                                      }`}>
+                                        {formattedChange}
+                                      </span>
+                                    );
+                                  }
+                                  return null;
+                                })()}
+                                {(() => {
+                                  const displayTVL = getDisplayTVL(token);
+                                  const hasTVL = displayTVL !== null && displayTVL > 0;
+                                  
+                                  if (hasTVL) {
+                                    return (
+                                      <span className="px-1.5 py-0.5 md:px-1 md:py-0.25 text-[9px] md:text-[10px] font-medium bg-yellow-400/20 text-yellow-400 rounded flex-shrink-0">
+                                        {formatTVL(displayTVL)} <span className="text-[8px] md:text-[9px] text-white">TVL</span>
+                                      </span>
+                                    );
+                                  }
+                                  return null;
+                                })()}
+                              </div>
                             </div>
-                            <div className="flex items-center justify-between gap-1 md:gap-2 mb-1 md:mb-1">
-                              <div className="text-gray-400 text-xs md:text-sm truncate">{token.name}</div>
+                            <div className="flex items-center justify-between gap-1 md:gap-1.5 mb-1 md:mb-1">
+                              <div className="text-gray-400 text-xs md:text-xs truncate">{token.name}</div>
                               {(() => {
                                 const displayVolume = getDisplayVolume(token);
                                 const hasVolume = displayVolume !== null && displayVolume > 0;
@@ -1743,17 +1932,17 @@ export default function TokenSearch({ chainId, activeTab = 'public', onDropdownT
                                 if (hasVolume) {
                                   return (
                                     <span className="px-1.5 py-0.5 md:px-1 md:py-0.25 text-[9px] md:text-[10px] font-medium bg-yellow-400/20 text-yellow-400 rounded flex-shrink-0">
-                                      {formatTVL(displayVolume)} <span className="text-[8px] md:text-[9px] text-white">24h</span>
+                                      {formatTVL(displayVolume)} <span className="text-[8px] md:text-[8px] text-white">24hr Volume</span>
                                     </span>
                                   );
                                 }
                                 return null;
                               })()}
                             </div>
-                            <div className="flex items-center justify-between gap-1 md:gap-2">
-                              <div className="flex items-center gap-1 md:gap-2">
-                                <span className="text-gray-600 text-[10px] md:text-xs font-mono">{truncateAddress(token.address, 6, 4)}</span>
-                                <div className="hidden md:flex items-center gap-0.5 md:gap-1">
+                            <div className="flex items-center justify-between gap-1 md:gap-1.5">
+                              <div className="flex items-center gap-1 md:gap-1.5">
+                                <span className="text-gray-600 text-[10px] md:text-[10px] font-mono">{truncateAddress(token.address, 6, 4)}</span>
+                                <div className="hidden md:flex items-center gap-0.5 md:gap-0.5">
                                   <button
                                     onClick={(e) => {
                                       e.stopPropagation();
@@ -1767,7 +1956,7 @@ export default function TokenSearch({ chainId, activeTab = 'public', onDropdownT
                                         },
                                       });
                                     }}
-                                    className="inline-flex items-center justify-center w-5 h-5 md:w-4 md:h-4 text-yellow-400 hover:text-yellow-300 hover:bg-yellow-400/10 rounded transition-colors"
+                                    className="inline-flex items-center justify-center w-5 h-5 md:w-3.5 md:h-3.5 text-yellow-400 hover:text-yellow-300 hover:bg-yellow-400/10 rounded transition-colors"
                                     title="Copy address"
                                     aria-label="Copy address"
                                   >
@@ -1777,7 +1966,7 @@ export default function TokenSearch({ chainId, activeTab = 'public', onDropdownT
                                       viewBox="0 0 24 24"
                                       strokeWidth={2}
                                       stroke="currentColor"
-                                      className="w-4 h-4 md:w-3 md:h-3"
+                                      className="w-4 h-4 md:w-2.5 md:h-2.5"
                                     >
                                       <path
                                         strokeLinecap="round"
@@ -1795,7 +1984,7 @@ export default function TokenSearch({ chainId, activeTab = 'public', onDropdownT
                                         target="_blank"
                                         rel="noopener noreferrer"
                                         onClick={(e) => e.stopPropagation()}
-                                        className="inline-flex items-center justify-center w-5 h-5 md:w-4 md:h-4 text-yellow-400 hover:text-yellow-300 hover:bg-yellow-400/10 rounded transition-colors"
+                                        className="inline-flex items-center justify-center w-5 h-5 md:w-3.5 md:h-3.5 text-yellow-400 hover:text-yellow-300 hover:bg-yellow-400/10 rounded transition-colors"
                                         title="View on Explorer"
                                       >
                                         <svg
@@ -1804,7 +1993,7 @@ export default function TokenSearch({ chainId, activeTab = 'public', onDropdownT
                                           viewBox="0 0 24 24"
                                           strokeWidth={2}
                                           stroke="currentColor"
-                                          className="w-4 h-4 md:w-3 md:h-3"
+                                          className="w-4 h-4 md:w-2.5 md:h-2.5"
                                         >
                                           <path
                                             strokeLinecap="round"
@@ -1829,7 +2018,7 @@ export default function TokenSearch({ chainId, activeTab = 'public', onDropdownT
                                         e.stopPropagation();
                                       }}
                                       prefetch={true}
-                                      className="hidden md:inline-flex items-center justify-center min-h-[32px] md:min-h-[24px] px-2 text-[10px] font-semibold bg-gradient-to-r from-yellow-400 to-yellow-500 hover:from-yellow-300 hover:to-yellow-400 text-gray-800 rounded transition-all duration-200 shadow-sm shadow-yellow-500/25"
+                                      className="hidden md:inline-flex items-center justify-center min-h-[32px] md:min-h-[20px] px-1.5 md:px-1.5 text-[10px] md:text-[9px] font-semibold bg-gradient-to-r from-yellow-400 to-yellow-500 hover:from-yellow-300 hover:to-yellow-400 text-gray-800 rounded transition-all duration-200 shadow-sm shadow-yellow-500/25"
                                       title="View token details"
                                     >
                                       <span>More Info</span>

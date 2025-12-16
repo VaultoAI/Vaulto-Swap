@@ -15,7 +15,7 @@ interface Token {
 export default function JupiterWidgetWrapper() {
   const [isMounted, setIsMounted] = useState(false);
   const [isJupiterLoaded, setIsJupiterLoaded] = useState(false);
-  const [fixedMint, setFixedMint] = useState<string>('PreweJYECqtQwBtpxHL171nL2K6umo692gTm7Q3rpgF'); // OpenAI address - default for private market
+  const [fixedMint, setFixedMint] = useState<string>('PreANxuXjsy2pvisWWMNB6YaJNzr7681wJJr2rHsfTh'); // SpaceX address - default for private market
   const containerRef = useRef<HTMLDivElement>(null);
   const jupiterInitializedRef = useRef(false);
   
@@ -133,8 +133,8 @@ export default function JupiterWidgetWrapper() {
             },
             {
               address: 'PreANxuXjsy2pvisWWMNB6YaJNzr7681wJJr2rHsfTh',
-              symbol: 'TOKEN4',
-              name: 'Token 4',
+              symbol: 'SpaceX',
+              name: 'SpaceX',
               decimals: 9,
             },
             {
