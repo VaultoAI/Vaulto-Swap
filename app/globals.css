@@ -104,7 +104,7 @@ body {
       overflow-x: hidden;
       -webkit-overflow-scrolling: touch;
       position: relative;
-      padding-bottom: 4rem; /* Add padding to account for fixed footer on mobile */
+      padding-bottom: 0rem; /* No bottom padding on mobile */
     }
     
     /* Landing section container - fixed height on mobile (90vh = reduced by 25% from 120vh) */
