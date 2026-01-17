@@ -283,7 +283,7 @@ export default function Home() {
   }, []);
   
   return (
-    <div className="min-h-screen md:min-h-screen md:h-auto bg-black md:bg-gradient-to-br md:from-black md:via-gray-900 md:to-black flex flex-col md:block">
+    <div className="min-h-screen md:h-screen bg-black md:bg-gradient-to-br md:from-black md:via-gray-900 md:to-black flex flex-col md:block overflow-y-auto">
       <main className="relative flex-1 flex flex-col md:block">
       {/* Subtle Gold Gradient Overlays */}
       <div className="absolute inset-0 pointer-events-none overflow-hidden z-0">
@@ -437,8 +437,8 @@ export default function Home() {
         </div>
       </header>
 
-      <div className="relative z-10 container mx-auto px-4 flex flex-col md:block h-[90vh] md:h-auto md:min-h-screen pt-2 md:pt-12 pb-0 overflow-hidden md:overflow-visible">
-        <section aria-label="Token swap interface" className="w-full h-full flex flex-col md:block md:h-auto md:min-h-0">
+      <div className="relative z-10 container mx-auto px-4 flex flex-col md:block h-[90vh] md:h-screen pt-2 md:pt-12 pb-0 overflow-hidden">
+        <section aria-label="Token swap interface" className="w-full h-full flex flex-col md:block md:h-auto">
           <h1 className="sr-only">Vaulto Swap - Trade Tokenized Stocks with Stablecoins</h1>
           
           {/* Typography Section - Hidden on mobile, shown on desktop */}
@@ -462,7 +462,7 @@ export default function Home() {
       </div>
 
         {/* Private Markets Section */}
-        <section className="relative z-10 w-full bg-black pt-8 sm:pt-12 md:pt-16 pb-20 md:pb-0 overflow-hidden" style={{ marginTop: '-100px' }}>
+        <section className="relative z-10 w-full bg-black pt-16 sm:pt-20 md:pt-24 pb-20 md:pb-0 overflow-hidden">
           <div className="container mx-auto px-4">
             {/* Social Media Icons - Mobile only, above Private Markets text */}
             <div className="flex items-center justify-center gap-4 mb-6 md:hidden">

@@ -24,7 +24,7 @@ html {
 
 body {
   color: var(--foreground);
-  background: var(--background);
+  background: #000000;
   font-family: var(--font-inter);
   min-height: 100vh;
   min-height: 100svh; /* Use small viewport height to prevent mobile layout shifts */
@@ -33,6 +33,7 @@ body {
   text-rendering: optimizeLegibility;
   position: relative;
   overflow-x: hidden !important;
+  overflow-y: auto;
   width: 100%;
   max-width: 100vw;
 }
@@ -69,7 +70,7 @@ body {
     min-height: -webkit-fill-available; /* Fallback for Safari iOS */
     overflow-y: auto;
     overflow-x: hidden;
-    background: #000000; /* Ensure solid black background, no gradient showing below footer */
+    background: #000000; /* Ensure solid black background */
   }
   
   /* Ensure footer covers bottom completely on mobile */
@@ -237,6 +238,12 @@ body {
     top: 0 !important;
     z-index: 50 !important;
     width: 100% !important;
+  }
+  
+  /* Ensure main container uses full viewport height on desktop */
+  body > div.min-h-screen {
+    height: 100vh;
+    overflow-y: auto;
   }
   
   /* Ensure header sticky works within main container */

@@ -87,4 +87,3 @@ export function formatFeeTier(feeTierBps: number): string {
   const percentage = feeTierBps / 10000;
   return `${percentage.toFixed(2)}%`;
 }
-
